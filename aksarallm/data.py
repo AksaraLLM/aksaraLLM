@@ -47,8 +47,10 @@ class TextDataset(Dataset):
         
         print(f"📊 Tokenizing {len(ds)} examples...")
         
+        import array
         # Tokenize all texts and concatenate into one big sequence
-        all_tokens = []
+        # We use an array of 32-bit unsigned integers to save memory instead of a Python list
+        all_tokens = array.array('I')
         for i, example in enumerate(ds):
             tokens = self.tokenizer.encode(
                 example[text_key],
