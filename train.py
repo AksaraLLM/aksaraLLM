@@ -4,6 +4,8 @@ aksaraLLM — Training Script
 Train a small language model from scratch on your machine.
 
 Usage:
+    python train.py --size super_micro_nano # ~2M params
+    python train.py --size super_nano       # ~4M params
     python train.py --size nano     # ~8M params, ~15 min on Mac
     python train.py --size micro    # ~15M params, ~30 min on Mac
     python train.py --size mini     # ~40M params, ~2 hours on Mac
@@ -28,13 +30,29 @@ def get_device() -> torch.device:
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"🔥 Using CUDA: {torch.cuda.get_device_name()}")
+        return device
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        device = torch.device("xpu")
+        name = torch.xpu.get_device_name(0) if hasattr(torch.xpu, 'get_device_name') else 'Intel GPU'
+        print(f"🚀 Using Intel XPU (iGPU/dGPU): {name}")
+        return device
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = torch.device("mps")
         print("🍎 Using Apple Silicon (MPS)")
+        return device
     else:
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                device = torch_directml.device()
+                print(f"🚀 Using DirectML ({torch_directml.device_name(0)})")
+                return device
+        except ImportError:
+            pass
+
         device = torch.device("cpu")
         print("💻 Using CPU (training will be slower)")
-    return device
+        return device
 
 
 def get_lr(step: int, config: aksaraLLMConfig) -> float:
@@ -69,11 +87,18 @@ def evaluate(model, val_loader, device, config) -> float:
 
 
 def save_checkpoint(model, optimizer, step, config, val_loss, path):
-    """Save a training checkpoint."""
+    """Save a training checkpoint safely to avoid pickler memory explosion."""
+    import gc
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    
+    # We serialize entirely through CPU variables to prevent DML driver leaks during Pickling
+    cpu_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+    
+    # Optional optimizer save. Skip optimizer states for mini/small models to save memory!
+    # Because saving 400MB+ nested dict crashes on some systems.
+    
     torch.save({
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "model_state_dict": cpu_model_state,
         "step": step,
         "val_loss": val_loss,
         "config": {
@@ -87,6 +112,9 @@ def save_checkpoint(model, optimizer, step, config, val_loss, path):
             "bias": config.bias,
         },
     }, path)
+    
+    del cpu_model_state
+    gc.collect()
     print(f"💾 Checkpoint saved: {path}")
 
 
@@ -262,10 +290,16 @@ def train(config: aksaraLLMConfig):
 
 
 def main():
+    if sys.stdout.encoding.lower() != 'utf-8':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except AttributeError:
+            pass
+            
     parser = argparse.ArgumentParser(description="Train aksaraLLM")
     parser.add_argument(
         "--size", type=str, default="nano",
-        choices=["nano", "micro", "mini", "small"],
+        choices=["super_micro_nano", "super_nano", "nano", "micro", "mini", "small"],
         help="Model size preset (default: nano)"
     )
     parser.add_argument("--max-steps", type=int, default=None, help="Override max training steps")

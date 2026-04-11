@@ -49,8 +49,8 @@ class TextDataset(Dataset):
         
         import array
         # Tokenize all texts and concatenate into one big sequence
-        # We use an array of 32-bit unsigned integers to save memory instead of a Python list
-        all_tokens = array.array('I')
+        # We use an array of 32-bit signed integers 'i' for direct memory mapping
+        all_tokens = array.array('i')
         for i, example in enumerate(ds):
             tokens = self.tokenizer.encode(
                 example[text_key],
@@ -63,8 +63,12 @@ class TextDataset(Dataset):
                 print(f"   Processed {i + 1}/{len(ds)} examples "
                       f"({len(all_tokens) / 1e6:.1f}M tokens)")
         
-        # Convert to tensor and chunk into sequences
-        all_tokens = torch.tensor(all_tokens, dtype=torch.long)
+        # Convert to tensor and chunk into sequences efficiently to save RAM
+        # Using numpy/frombuffer avoids massive nested Python integer lists internally
+        # Zero-copy conversion straight to int32 tensor
+        import numpy as np
+        all_tokens = torch.from_numpy(np.frombuffer(all_tokens, dtype=np.int32))
+        
         n_sequences = len(all_tokens) // (self.seq_len + 1)
         all_tokens = all_tokens[:n_sequences * (self.seq_len + 1)]
         self.data = all_tokens.view(n_sequences, self.seq_len + 1)
@@ -76,7 +80,8 @@ class TextDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        chunk = self.data[idx]
+        # convert to torch.long only on-demand per mini-batch
+        chunk = self.data[idx].to(torch.long)
         return {
             "input_ids": chunk[:-1],   # (seq_len,)
             "targets": chunk[1:],       # (seq_len,)

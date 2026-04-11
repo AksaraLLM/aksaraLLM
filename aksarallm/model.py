@@ -29,24 +29,35 @@ class RMSNorm(nn.Module):
 
 
 def precompute_freqs_cis(dim: int, max_seq_len: int, theta: float = 10000.0):
-    """Precompute the frequency tensor for RoPE."""
+    """Precompute the frequency tensor for RoPE using real components to support DirectML."""
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
     t = torch.arange(max_seq_len).float()
     freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    return freqs_cis
+    # Return cos and sin instead of complex type
+    return torch.stack([torch.cos(freqs), torch.sin(freqs)], dim=-1)
 
 
 def apply_rotary_emb(xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor):
-    """Apply rotary embeddings to query and key tensors."""
-    xq_complex = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_complex = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+    """Apply rotary embeddings to query and key tensors using real numbers."""
+    # Reshape xq and xk into (..., head_dim//2, 2)
+    xq_reshaped = xq.float().reshape(*xq.shape[:-1], -1, 2)
+    xk_reshaped = xk.float().reshape(*xk.shape[:-1], -1, 2)
     
     freqs_cis = freqs_cis[:xq.shape[1]]
-    freqs_cis = freqs_cis[None, :, None, :]  # (1, seq_len, 1, head_dim//2)
+    freqs_cos = freqs_cis[:, :, 0][None, :, None, :]  # (1, seq_len, 1, head_dim//2)
+    freqs_sin = freqs_cis[:, :, 1][None, :, None, :]  # (1, seq_len, 1, head_dim//2)
     
-    xq_out = torch.view_as_real(xq_complex * freqs_cis).flatten(-2)
-    xk_out = torch.view_as_real(xk_complex * freqs_cis).flatten(-2)
+    xq_r, xq_i = xq_reshaped.unbind(-1)
+    xk_r, xk_i = xk_reshaped.unbind(-1)
+    
+    xq_out_r = xq_r * freqs_cos - xq_i * freqs_sin
+    xq_out_i = xq_r * freqs_sin + xq_i * freqs_cos
+    
+    xk_out_r = xk_r * freqs_cos - xk_i * freqs_sin
+    xk_out_i = xk_r * freqs_sin + xk_i * freqs_cos
+    
+    xq_out = torch.stack([xq_out_r, xq_out_i], dim=-1).flatten(-2)
+    xk_out = torch.stack([xk_out_r, xk_out_i], dim=-1).flatten(-2)
     
     return xq_out.type_as(xq), xk_out.type_as(xk)
 

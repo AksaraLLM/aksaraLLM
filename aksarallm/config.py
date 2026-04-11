@@ -54,6 +54,26 @@ class aksaraLLMConfig:
 
 # Pre-defined configurations
 CONFIGS = {
+    "super_micro_nano": aksaraLLMConfig(
+        n_layers=2,
+        n_heads=2,
+        n_embd=64,
+        n_inner=256,
+        max_seq_len=256,
+        max_steps=1000,
+        batch_size=2,
+        gradient_accumulation_steps=64,
+    ),
+    "super_nano": aksaraLLMConfig(
+        n_layers=3,
+        n_heads=4,
+        n_embd=128,
+        n_inner=512,
+        max_seq_len=256,
+        max_steps=2000,
+        batch_size=2,
+        gradient_accumulation_steps=64,
+    ),
     "nano": aksaraLLMConfig(
         n_layers=4,
         n_heads=4,
@@ -61,7 +81,8 @@ CONFIGS = {
         n_inner=1024,
         max_seq_len=256,
         max_steps=3000,
-        batch_size=32,
+        batch_size=2,
+        gradient_accumulation_steps=64,
     ),
     "micro": aksaraLLMConfig(
         n_layers=6,
@@ -70,7 +91,8 @@ CONFIGS = {
         n_inner=1536,
         max_seq_len=256,
         max_steps=5000,
-        batch_size=32,
+        batch_size=2,
+        gradient_accumulation_steps=64,
     ),
     "mini": aksaraLLMConfig(
         n_layers=8,
@@ -79,7 +101,8 @@ CONFIGS = {
         n_inner=2048,
         max_seq_len=512,
         max_steps=10000,
-        batch_size=16,
+        batch_size=1,
+        gradient_accumulation_steps=64,
     ),
     "small": aksaraLLMConfig(
         n_layers=12,
@@ -88,6 +111,7 @@ CONFIGS = {
         n_inner=3072,
         max_seq_len=512,
         max_steps=20000,
-        batch_size=8,
+        batch_size=1,
+        gradient_accumulation_steps=32,
     ),
 }
