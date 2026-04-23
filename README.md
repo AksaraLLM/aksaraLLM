@@ -164,6 +164,56 @@ Apache License 2.0 — Bebas digunakan untuk keperluan komersial maupun riset.
 
 ---
 
+## 🧪 AksaraLLM 20B (From Scratch) — Work In Progress
+
+The **20B flagship** is being trained **from scratch** (no foundation model
+lineage with Qwen) as a separate, parallel line of development. The 1.5B‑v2
+model documented above is untouched.
+
+### Model
+
+| Attribute | Value |
+|---|---|
+| Parameters | ~22.3B |
+| Layers | 42 |
+| Hidden size | 6144 |
+| FFN intermediate (SwiGLU) | 16384 |
+| Attention | 48 heads / 8 KV heads (GQA 6×) |
+| Context window | 8192 (RoPE θ=1 000 000) |
+| Vocabulary | 131 072 (BPE, trained on Indonesian corpus) |
+| Chat template | `[SYS]…[/SYS][INST]…[/INST]response[EOS]` |
+
+### Pipeline
+
+Scaffolding and dry‑runnable scripts for every stage live in four repos:
+
+| Repo | Contents |
+|---|---|
+| `AksaraLLM/aksaraLLM` | Custom `aksaraLLMModel`, tokenizer, inference, GGUF export |
+| `AksaraLLM/aksara-train` | `train_20b_{pretrain,sft,dpo}.py`, `create_hf_repos.py` |
+| `AksaraLLM/aksara-data` | Corpus downloader, re-template, MinHash LSH dedup, SFT/DPO builders, teacher gen |
+| `AksaraLLM/aksara-eval` | Perplexity + `aksara_indo_bench` + identity + English-leak harness |
+| `AksaraLLM/aksara-tokenizer` | `train_tokenizer_20b.py` (BPE → 131 072 vocab) |
+
+### Quick start
+
+```python
+from aksarallm.model import aksaraLLMModel
+from aksarallm.tokenizer_utils import AksaraTokenizer
+from aksarallm.inference import AksaraChatSession
+
+model = aksaraLLMModel.from_pretrained("Ezekiel999/AksaraLLM-20B-Instruct")
+tok = AksaraTokenizer.from_pretrained("Ezekiel999/aksara-tokenizer-20b")
+session = AksaraChatSession(model=model, tokenizer=tok)
+print(session.reply("Siapa kamu?"))
+```
+
+Every training / data / eval script accepts `--dry-run` for a CPU-only
+smoke test (no HF network required) — see `REPORT.md` for the validation
+matrix.
+
+---
+
 <p align="center">
   <b>AksaraLLM — Revolusi AI Indonesia dimulai dari sini. 🇮🇩🚀</b>
 </p>
