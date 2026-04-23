@@ -162,16 +162,35 @@ class SelfAttention(nn.Module):
         k_rep = repeat_kv(k, self.n_rep)
         v_rep = repeat_kv(v, self.n_rep)
 
-        # Causal masking is only correct when every query can attend to the
-        # *entire* K/V sequence from the start — i.e. a prefill pass with
-        # ``past_len == 0`` and query length > 1.  For incremental decode
-        # (``T_q == 1`` with a nonempty cache) the single query must attend
-        # to everything, so disable ``is_causal``.
-        is_causal = (kv_cache is None) and (T > 1)
+        # Three attention regimes:
+        #   (a) prefill / training (no cache, T>1)  → use built-in is_causal;
+        #   (b) incremental decode (cache, T==1)    → single query attends to
+        #       everything, no masking needed;
+        #   (c) cached multi-token continuation     → queries live at absolute
+        #       positions ``[past_len : past_len+T]``; build an explicit mask
+        #       so each query only attends to keys up to and including its own
+        #       position. PyTorch's is_causal assumes Q and K start at 0 and is
+        #       therefore wrong here.
+        past_len = k.shape[2] - T
+        if kv_cache is None:
+            attn_mask = None
+            is_causal = T > 1
+        elif T == 1:
+            attn_mask = None
+            is_causal = False
+        else:
+            device, dtype = q.device, q.dtype
+            # mask[i, j] = 0 if j <= past_len + i else -inf
+            q_idx = torch.arange(T, device=device).unsqueeze(1)         # (T, 1)
+            k_idx = torch.arange(k.shape[2], device=device).unsqueeze(0)  # (1, Tk)
+            allowed = k_idx <= (q_idx + past_len)
+            attn_mask = torch.zeros(T, k.shape[2], device=device, dtype=dtype)
+            attn_mask = attn_mask.masked_fill(~allowed, float("-inf"))
+            is_causal = False
 
         out = F.scaled_dot_product_attention(
             q, k_rep, v_rep,
-            attn_mask=None,
+            attn_mask=attn_mask,
             dropout_p=self.attn_dropout.p if self.training else 0.0,
             is_causal=is_causal,
         )

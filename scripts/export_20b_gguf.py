@@ -107,7 +107,7 @@ def export(model, tokenizer, out_path: str) -> None:
     writer.add_head_count(cfg.n_heads)
     writer.add_head_count_kv(cfg.n_kv_heads)
     writer.add_rope_freq_base(float(getattr(cfg, "rope_theta", 10000.0)))
-    writer.add_layer_norm_rms_eps(1e-6)
+    writer.add_layer_norm_rms_eps(float(getattr(cfg, "rms_norm_eps", 1e-6)))
     writer.add_file_type(gguf.LlamaFileType.MOSTLY_F16)
 
     # Tokenizer vocabulary.

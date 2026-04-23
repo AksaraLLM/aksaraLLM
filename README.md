@@ -198,11 +198,13 @@ Scaffolding and dry‑runnable scripts for every stage live in four repos:
 ### Quick start
 
 ```python
+from aksarallm.model import aksaraLLMModel
+from aksarallm.tokenizer_utils import AksaraTokenizer
 from aksarallm.inference import AksaraChatSession
-session = AksaraChatSession.from_pretrained(
-    model_path="Ezekiel999/AksaraLLM-20B-Instruct",
-    tokenizer_path="Ezekiel999/aksara-tokenizer-20b",
-)
+
+model = aksaraLLMModel.from_pretrained("Ezekiel999/AksaraLLM-20B-Instruct")
+tok = AksaraTokenizer.from_pretrained("Ezekiel999/aksara-tokenizer-20b")
+session = AksaraChatSession(model=model, tokenizer=tok)
 print(session.reply("Siapa kamu?"))
 ```
 
