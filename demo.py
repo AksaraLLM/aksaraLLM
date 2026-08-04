@@ -12,10 +12,10 @@ import argparse
 import sys
 
 import torch
-from transformers import AutoTokenizer
 
 from aksarallm.config import aksaraLLMConfig
 from aksarallm.model import aksaraLLMModel
+from aksarallm.data import load_tokenizer
 
 
 def load_model(checkpoint_path: str, device: torch.device):
@@ -29,6 +29,7 @@ def load_model(checkpoint_path: str, device: torch.device):
     config = aksaraLLMConfig(
         n_layers=cfg["n_layers"],
         n_heads=cfg["n_heads"],
+        n_kv_heads=cfg.get("n_kv_heads", 0),  # 0 = defaults to n_heads (MHA) if missing (older checkpoints)
         n_embd=cfg["n_embd"],
         n_inner=cfg["n_inner"],
         vocab_size=cfg["vocab_size"],
@@ -170,14 +171,19 @@ def main():
         "--temperature", type=float, default=0.8,
         help="Sampling temperature"
     )
-    
+    parser.add_argument(
+        "--tokenizer-path", type=str, default=None,
+        help="Path to the AksaraTokenizer used to train this checkpoint (must match, or "
+             "generation will be garbage). Falls back to GPT-2 for smoke-testing only."
+    )
+
     args = parser.parse_args()
-    
+
     device = get_device()
     model, config = load_model(args.checkpoint, device)
-    
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
+
+    config.tokenizer_path = args.tokenizer_path or config.tokenizer_path
+    tokenizer = load_tokenizer(config)
     
     if args.prompt:
         # Non-interactive: single generation

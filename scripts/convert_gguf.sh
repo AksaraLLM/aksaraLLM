@@ -5,15 +5,26 @@
 # Otomatis download model dari HuggingFace → convert ke GGUF Q4_K_M
 # Hasil bisa dipakai di: Ollama, LM Studio, llama.cpp
 #
+# MODEL_REPO harus sudah dalam format HF standar (config.json + safetensors),
+# dihasilkan dari checkpoint from-scratch via `python upload_to_hf.py` (yang
+# memakai aksarallm.hf_export) — bukan checkpoint mentah aksaraLLM.
+#
 # Cara pakai:
-#   chmod +x ~/aksarallm_convert_gguf.sh
-#   bash ~/aksarallm_convert_gguf.sh
+#   chmod +x scripts/convert_gguf.sh
+#   bash scripts/convert_gguf.sh AksaraLLM/your-exported-repo
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 set -e
 
+if [ -z "$1" ]; then
+    echo "Usage: bash scripts/convert_gguf.sh <hf-repo-id>"
+    echo "  <hf-repo-id> must be a standard HF-format export (see upload_to_hf.py)"
+    exit 1
+fi
+
 # Config
-MODEL_REPO="${1:-AksaraLLM/aksarallm-1.5b-v2}"
+MODEL_REPO="$1"
+MODEL_SLUG="${MODEL_REPO##*/}"
 WORK_DIR="$HOME/gguf_convert"
 LLAMA_CPP_DIR="$HOME/llama.cpp"
 
@@ -64,7 +75,7 @@ print('✅ Download selesai!')
 
 # ── Step 6: Convert to GGUF F16 ──
 print_step "STEP 6: Convert ke GGUF F16..."
-GGUF_F16="$WORK_DIR/aksarallm-1.5b-v2-F16.gguf"
+GGUF_F16="$WORK_DIR/$MODEL_SLUG-F16.gguf"
 python3 "$LLAMA_CPP_DIR/convert_hf_to_gguf.py" "$MODEL_DIR" \
     --outfile "$GGUF_F16" \
     --outtype f16
@@ -72,7 +83,7 @@ print_info "F16: $(du -h "$GGUF_F16" | cut -f1)"
 
 # ── Step 7: Quantize to Q4_K_M ──
 print_step "STEP 7: Quantize ke Q4_K_M (optimal untuk Mac)..."
-GGUF_Q4="$WORK_DIR/aksarallm-1.5b-v2-Q4_K_M.gguf"
+GGUF_Q4="$WORK_DIR/$MODEL_SLUG-Q4_K_M.gguf"
 "$LLAMA_CPP_DIR/build/bin/llama-quantize" "$GGUF_F16" "$GGUF_Q4" Q4_K_M
 print_info "Q4_K_M: $(du -h "$GGUF_Q4" | cut -f1)"
 
@@ -90,8 +101,8 @@ print_step "STEP 8: Quick test..."
 # ── Step 9: Create Ollama Modelfile ──
 print_step "STEP 9: Buat Ollama Modelfile..."
 MODELFILE="$WORK_DIR/Modelfile"
-cat > "$MODELFILE" << 'EOF'
-FROM ./aksarallm-1.5b-v2-Q4_K_M.gguf
+cat > "$MODELFILE" << EOF
+FROM ./$MODEL_SLUG-Q4_K_M.gguf
 
 TEMPLATE """<|im_start|>system
 {{ .System }}<|im_end|>

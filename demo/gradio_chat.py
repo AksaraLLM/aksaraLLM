@@ -4,19 +4,31 @@
  💬 AksaraLLM Chat Demo — Gradio Web Interface
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+Loads a from-scratch AksaraLLM checkpoint exported to standard HF format via
+aksarallm.hf_export (see upload_to_hf.py) — not a fine-tune of another base
+model. There's no bundled default repo here because none is published yet
+(see the project roadmap); point --model at your own export.
+
 pip install gradio transformers torch
-python3 aksarallm_demo.py
+python3 gradio_chat.py --model /path/to/hf_export_dir
+python3 gradio_chat.py --model AksaraLLM/your-exported-repo
 → Buka http://localhost:7860
 """
 
+import argparse
 import gradio as gr
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+ap = argparse.ArgumentParser()
+ap.add_argument("--model", required=True, help="HF repo id or local dir produced by aksarallm.hf_export")
+ap.add_argument("--port", type=int, default=7860)
+cli_args = ap.parse_args()
+
 # ====================================================================
 #  CONFIG
 # ====================================================================
-MODEL_NAME = "AksaraLLM/aksarallm-1.5b-v2"
+MODEL_NAME = cli_args.model
 SYSTEM_PROMPT = "Kamu adalah AksaraLLM, asisten AI berbahasa Indonesia yang cerdas, sopan, dan membantu. Jawab pertanyaan dengan akurat dan detail."
 
 # ====================================================================
@@ -103,15 +115,14 @@ with gr.Blocks(css=CSS, title="AksaraLLM Chat", theme=gr.themes.Soft()) as demo:
     <div style="text-align: center; padding: 20px 0;">
         <h1>🇮🇩 AksaraLLM Chat</h1>
         <p style="color: #666; font-size: 16px;">
-            Model Bahasa AI Open-Source Indonesia • 1.5B Parameters
+            Model Bahasa AI Open-Source Indonesia — dilatih dari nol
         </p>
     </div>
     """)
-    
+
     chatbot = gr.Chatbot(
         height=500,
         show_label=False,
-        avatar_images=(None, "https://huggingface.co/AksaraLLM/aksarallm-1.5b-v2/resolve/main/logo.png"),
         bubble_full_width=False,
     )
     
@@ -142,9 +153,9 @@ with gr.Blocks(css=CSS, title="AksaraLLM Chat", theme=gr.themes.Soft()) as demo:
         label="💡 Contoh Pertanyaan"
     )
     
-    gr.HTML("""
+    gr.HTML(f"""
     <div style="text-align: center; padding: 10px; color: #999; font-size: 12px;">
-        <p>AksaraLLM v2 • Apache 2.0 • <a href="https://huggingface.co/AksaraLLM/aksarallm-1.5b-v2">HuggingFace</a></p>
+        <p>AksaraLLM • Apache 2.0 • <a href="https://huggingface.co/{MODEL_NAME}">{MODEL_NAME}</a></p>
     </div>
     """)
     
@@ -162,10 +173,10 @@ with gr.Blocks(css=CSS, title="AksaraLLM Chat", theme=gr.themes.Soft()) as demo:
 # ====================================================================
 if __name__ == "__main__":
     print("\n🚀 Starting AksaraLLM Chat Demo...")
-    print("📍 Open: http://localhost:7860\n")
+    print(f"📍 Open: http://localhost:{cli_args.port}\n")
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=cli_args.port,
         share=False,
         show_error=True
     )

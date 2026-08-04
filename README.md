@@ -1,163 +1,89 @@
----
-language:
-- id
-- en
-license: apache-2.0
-library_name: transformers
-pipeline_tag: text-generation
-tags:
-- indonesian
-- aksarallm
-- bahasa-indonesia
-- qwen2
-- sft
-- dpo
-- chat
-base_model: Qwen/Qwen2.5-1.5B-Instruct
-datasets:
-- AksaraLLM/aksara-mega-sft-v5
-- AksaraLLM/aksara-dpo-id-v4
-model-index:
-- name: aksarallm-1.5b-v2
-  results: []
----
+# 🇮🇩 aksaraLLM
 
-# 🇮🇩 AksaraLLM 1.5B v2
+**Large Language Model Bahasa Indonesia — dilatih dari nol, bukan fine-tune model tertutup.**
 
-<p align="center">
-  <b>Model Bahasa AI Open-Source Terbaik untuk Bahasa Indonesia</b><br>
-  <i>The Best Open-Source Indonesian Language Model</i>
-</p>
+Repo ini berisi arsitektur model, tokenizer utilities, dan pipeline pre-training +
+alignment (SFT/DPO) dari nol untuk AksaraLLM. Tidak ada script di sini yang
+mem-fine-tune model pihak ketiga (Qwen, LLaMA, dll) — kalau kamu mencari itu,
+bukan di sini tempatnya. Lihat [community/RFC-001](https://github.com/AksaraLLM/community/blob/main/rfcs/RFC-001-model-architecture.md)
+untuk detail keputusan arsitektur.
 
----
+## Arsitektur
 
-## ✨ Highlights
+Decoder-only Transformer bergaya modern:
+- **RoPE** (Rotary Position Embeddings)
+- **RMSNorm** (pre-normalization)
+- **SwiGLU** activation
+- **GQA** (Grouped-Query Attention) untuk skala ≥200M
+- Weight-tied input/output embeddings
+- Gradient checkpointing untuk hemat VRAM
 
-- 🇮🇩 **Fokus Bahasa Indonesia** — Dilatih khusus dengan 500K+ data instruksi Indonesia
-- ⚡ **Ringan & Cepat** — 1.5B parameter, bisa jalan di laptop bahkan HP Android (via GGUF)
-- 🛡️ **Aligned & Safe** — DPO training dengan 200K preference pairs
-- 🧠 **Identitas Kuat** — Tahu siapa dirinya, menolak konten berbahaya
-- 📖 **100% Open Source** — Model, data, dan kode tersedia bebas
+Lihat [`aksarallm/model.py`](aksarallm/model.py) dan [`aksarallm/config.py`](aksarallm/config.py)
+untuk implementasi dan preset skala (nano/micro/mini/small/medium/large/xlarge,
+~10M sampai ~1B parameter).
 
-## 📊 Model Details
+## Struktur Repo
 
-| Attribute | Value |
+| Path | Fungsi |
 |---|---|
-| **Base Model** | Qwen2.5-1.5B-Instruct |
-| **Parameters** | 1.78B |
-| **Context Window** | 32K tokens |
-| **Training Data** | 500K SFT + 200K DPO |
-| **Training Hardware** | Google Cloud TPU v6e-4 |
-| **Training Method** | Full fine-tuning (SFT → DPO) |
-| **Precision** | BFloat16 |
-| **License** | Apache 2.0 |
+| `aksarallm/model.py` | Arsitektur transformer |
+| `aksarallm/config.py` | Preset konfigurasi skala model |
+| `aksarallm/tokenizer_utils.py` | Wrapper `AksaraTokenizer` (BPE byte-level) — dilatih via [aksara-tokenizer](https://github.com/AksaraLLM/aksara-tokenizer) |
+| `aksarallm/data.py` | Data loading + tokenisasi untuk pre-training |
+| `aksarallm/trainer.py` | Training loop pre-training (CPU/CUDA/MPS/TPU) |
+| `aksarallm/hf_export.py` | Konversi checkpoint ke format `transformers` standar (`LlamaForCausalLM`) |
+| `train.py` | CLI pre-training dari nol |
+| `sft.py` | Supervised fine-tuning (instruction-tuning) di atas checkpoint pre-training sendiri |
+| `dpo.py` | Direct Preference Optimization (alignment) — [Rafailov et al., 2023](https://arxiv.org/abs/2305.18290) |
+| `demo.py` / `demo/gradio_chat.py` | Demo CLI / web untuk chat dengan checkpoint yang sudah dilatih |
+| `aksara_cli.py` | CLI interaktif dengan tools (baca file, jalankan perintah, dst) |
 
-## 🚀 Quick Start
+## Quick Start
 
-### Transformers (Python)
-```python
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
-model_name = "AksaraLLM/aksarallm-1.5b-v2"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", device_map="auto")
-
-messages = [
-    {"role": "system", "content": "Kamu adalah AksaraLLM, asisten AI berbahasa Indonesia yang cerdas dan membantu."},
-    {"role": "user", "content": "Jelaskan apa itu Pancasila!"}
-]
-
-text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-inputs = tokenizer(text, return_tensors="pt").to(model.device)
-outputs = model.generate(**inputs, max_new_tokens=512, temperature=0.7, top_p=0.9)
-print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True))
-```
-
-### Ollama (Lokal)
 ```bash
-# Segera tersedia
-ollama run aksarallm
+pip install -r requirements.txt
+
+# 1. Latih tokenizer dulu (lihat aksara-tokenizer repo), atau pakai yang sudah ada
+# 2. Pre-training dari nol — default corpus: Indonesian Wikipedia
+python train.py --size mini --tokenizer-path ../aksara-tokenizer/aksara-tokenizer-20b
+
+# 3. (Opsional) Instruction-tuning
+python sft.py --checkpoint checkpoints/aksarallm-mini/best_model.pt \
+    --data data/sft_id.jsonl --tokenizer-path ../aksara-tokenizer/aksara-tokenizer-20b
+
+# 4. (Opsional) Alignment dengan preference data
+python dpo.py --sft-checkpoint checkpoints/sft/sft_best.pt \
+    --data data/dpo_id.jsonl --tokenizer-path ../aksara-tokenizer/aksara-tokenizer-20b
+
+# 5. Coba hasilnya
+python demo.py --checkpoint checkpoints/aksarallm-mini/best_model.pt
 ```
 
-### llama.cpp (GGUF)
+Untuk training skala besar / TPU, lihat repo [aksara-train](https://github.com/AksaraLLM/aksara-train).
+
+## Kompatibilitas Ekosistem
+
+Arsitektur AksaraLLM (RoPE + GQA + RMSNorm + SwiGLU + tied embeddings) secara
+fungsional setara dengan LLaMA. `aksarallm.hf_export` mengonversi checkpoint
+terlatih ke format `transformers.LlamaForCausalLM` standar, sehingga bisa
+langsung dipakai dengan `AutoModelForCausalLM`, [aksara-eval](https://github.com/AksaraLLM/aksara-eval),
+vLLM, dan konversi GGUF (`scripts/convert_gguf.sh`) — tanpa kode model kustom.
+
 ```bash
-# Download GGUF dari tab "Files"
-./llama-cli -m aksarallm-1.5b-v2-Q4_K_M.gguf -p "Siapa kamu?" -n 256
+python upload_to_hf.py --checkpoint checkpoints/aksarallm-mini/best_model.pt \
+    --repo AksaraLLM/aksarallm-mini --tokenizer-path ../aksara-tokenizer/aksara-tokenizer-20b
 ```
 
-## 📚 Training Data
-
-### SFT Data (500K+ samples)
-| Sumber | Jumlah | Kategori |
-|---|---|---|
-| Bactrian-X Indonesian | ~80K | Instruksi umum |
-| Alpaca GPT-4 Indonesian | ~52K | Instruksi umum |
-| XLSum Indonesian | ~30K | Summarization |
-| WikiLingua ID | ~30K | Cross-lingual |
-| Paraphrase Augmentation | ~200K | Augmented |
-| Math & Coding | ~3.5K | STEM |
-| Identity & Safety | ~500 | Alignment |
-| Other Sources | ~100K | Mixed |
-
-### DPO Data (200K pairs)
-8 strategi rejected response:
-- Jawaban terlalu pendek
-- Bahasa salah (English instead of Indonesian)
-- Identitas salah (mengaku ChatGPT)
-- Nada kasar/tidak sopan
-- Jawaban minimal/malas
-- Jawaban repetitif
-- Menolak menjawab tanpa alasan
-- Jawaban asal-asalan
-
-## 🧪 Evaluation
-
-| Benchmark | Score | Notes |
-|---|---|---|
-| Identity Test | *pending* | Apakah model tahu dirinya AksaraLLM |
-| Safety Test | *pending* | Menolak konten berbahaya |
-| Indonesian Knowledge | *pending* | Pancasila, sejarah, geografi |
-| General QA | *pending* | Pengetahuan umum |
-| Math | *pending* | Aritmatika & soal cerita |
-| Coding | *pending* | Python, JavaScript |
-| Fluency | *pending* | Panjang & kualitas teks |
-
-> Hasil evaluasi akan diupdate setelah benchmark selesai. Lihat [aksarallm-eval-results](https://huggingface.co/AksaraLLM/aksarallm-eval-results) untuk detail.
-
-## ⚠️ Limitations
-
-- **Bukan pengganti profesional**: Jangan gunakan untuk keputusan medis, hukum, atau keuangan
-- **Bisa berhalusinasi**: Model mungkin menghasilkan informasi yang salah tapi terlihat meyakinkan
-- **Knowledge cutoff**: Pengetahuan terbatas pada data training
-- **Bahasa daerah**: Belum mendukung bahasa Jawa, Sunda, dll.
-- **Multi-turn**: Performa menurun pada percakapan yang sangat panjang
-
-## 🏗️ Architecture
-
-```
-Qwen2.5-1.5B-Instruct (Base)
-├── Transformer Decoder-only
-├── 28 layers
-├── Hidden size: 1536
-├── Attention heads: 12 (GQA with 2 KV heads)
-├── Intermediate size: 8960 (SwiGLU)
-├── Vocabulary: 151,936 tokens
-├── Position encoding: RoPE
-├── Normalization: RMSNorm
-└── Context: 32,768 tokens
-```
-
-## 📜 License
+## License
 
 Apache License 2.0 — Bebas digunakan untuk keperluan komersial maupun riset.
 
-## 👥 Team
+## Team
 
 **AksaraLLM** — Proyek AI Open-Source Indonesia
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- [Qwen Team (Alibaba)](https://huggingface.co/Qwen) — Base model
 - [Google TRC Program](https://sites.research.google/trc/) — TPU compute
 - [Hugging Face](https://huggingface.co) — Model hosting & datasets
 - Komunitas AI Indonesia 🇮🇩

@@ -12,7 +12,7 @@ class aksaraLLMConfig:
     """Configuration for aksaraLLM model variants."""
     
     # Model architecture
-    vocab_size: int = 50257  # GPT-2 tokenizer vocab size
+    vocab_size: int = 50257  # GPT-2 fallback size; overridden to match tokenizer_path when set
     max_seq_len: int = 256
     n_layers: int = 6
     n_heads: int = 6
@@ -34,10 +34,30 @@ class aksaraLLMConfig:
     save_interval: int = 1000
     gradient_accumulation_steps: int = 4
     grad_clip: float = 1.0
-    
+
+    # "bf16" (preferred — no loss-scaling needed, what modern LLM pretraining
+    # runs use whenever the accelerator supports it), "fp16" (needs a loss
+    # scaler; CUDA only), "fp32", or "auto" (bf16 if supported, else fp16 on
+    # CUDA, else fp32).
+    precision: str = "auto"
+
+    # Trades ~30% compute for large activation-memory savings by recomputing
+    # activations during backward instead of storing them — lets you fit
+    # bigger batches/models on limited (e.g. donated) GPUs.
+    gradient_checkpointing: bool = False
+
     # Data
-    dataset_name: str = "roneneldan/TinyStories"
-    
+    # Default corpus is Indonesian Wikipedia — AksaraLLM pretrains on Indonesian
+    # text, not English, so this (not an English dataset) is the right default.
+    # Override with --dataset / --dataset-config for other HF datasets.
+    dataset_name: str = "wikimedia/wikipedia"
+    dataset_config: str = "20231101.id"  # HF dataset "name"/config arg; "" = none
+
+    # Path to a directory saved by AksaraTokenizer.save_pretrained() (see
+    # aksara-tokenizer). If empty, training falls back to the GPT-2 tokenizer
+    # for architecture smoke-testing only — it is not Indonesian-optimized.
+    tokenizer_path: str = ""
+
     # Paths
     output_dir: str = "checkpoints"
     

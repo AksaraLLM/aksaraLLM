@@ -29,14 +29,16 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
-from transformers import GPT2Tokenizer
 
 # ── Import model kita sendiri ────────────────────────────────────────────────
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from aksarallm.model import aksaraLLMModel
 from aksarallm.config import aksaraLLMConfig, CONFIGS
+from aksarallm.data import load_tokenizer
+from aksarallm.trainer import build_optimizer
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -60,7 +62,15 @@ PROMPT_TEMPLATE_NO_INPUT = """### Instruksi:
 
 
 class AlpacaDataset(Dataset):
-    """Dataset JSONL berisi instruksi-jawaban dalam Bahasa Indonesia."""
+    """Dataset JSONL berisi instruksi-jawaban dalam Bahasa Indonesia.
+
+    Loss is masked over the prompt (instruction/context) tokens — only the
+    response tokens contribute to the training signal. Training on the
+    prompt too is a common SFT bug: the model burns capacity "learning" to
+    predict text it was only ever given, not asked to generate, which dilutes
+    instruction-following quality. Every serious SFT recipe (Stanford Alpaca,
+    HF's SFTTrainer, InstructGPT) masks the prompt for this reason.
+    """
 
     def __init__(self, filepath: str, tokenizer, max_seq_len: int = 512):
         self.tokenizer = tokenizer
@@ -83,16 +93,7 @@ class AlpacaDataset(Dataset):
                     if not instruction or not output:
                         continue
 
-                    if inp:
-                        text = PROMPT_TEMPLATE.format(
-                            instruction=instruction, input=inp, output=output
-                        )
-                    else:
-                        text = PROMPT_TEMPLATE_NO_INPUT.format(
-                            instruction=instruction, output=output
-                        )
-
-                    self.samples.append(text)
+                    self.samples.append((instruction, inp, output))
                 except json.JSONDecodeError:
                     continue
 
@@ -102,15 +103,29 @@ class AlpacaDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        text = self.samples[idx]
-        ids = self.tokenizer.encode(
-            text,
-            max_length=self.max_seq_len,
-            truncation=True,
-        )
+        instruction, inp, output = self.samples[idx]
+        if inp:
+            full_text = PROMPT_TEMPLATE.format(instruction=instruction, input=inp, output=output)
+            prompt_text = PROMPT_TEMPLATE.format(instruction=instruction, input=inp, output="")
+        else:
+            full_text = PROMPT_TEMPLATE_NO_INPUT.format(instruction=instruction, output=output)
+            prompt_text = PROMPT_TEMPLATE_NO_INPUT.format(instruction=instruction, output="")
+
+        ids = self.tokenizer.encode(full_text, max_length=self.max_seq_len, truncation=True)
+        # Tokenized separately from full_text — BPE merges can shift a token or
+        # two right at the boundary, but this is the standard, widely-used
+        # approximation (e.g. Stanford Alpaca's own train.py does the same).
+        prompt_ids = self.tokenizer.encode(prompt_text, add_special_tokens=False)
+        prompt_len = min(len(prompt_ids), len(ids))
+
         ids = torch.tensor(ids, dtype=torch.long)
-        # Untuk SFT: input = ids[:-1], target = ids[1:]
-        return ids[:-1], ids[1:]
+        inputs = ids[:-1]
+        targets = ids[1:].clone()
+        # targets[j] predicts ids[j+1]; mask every target position whose
+        # predicted token still falls inside the prompt.
+        mask_len = max(prompt_len - 1, 0)
+        targets[:mask_len] = -1
+        return inputs, targets
 
 
 def collate_fn(batch):
@@ -177,9 +192,9 @@ def train(args):
         print(f"⚠️  Keys hilang: {len(missing)} (wajar kalau checkpoint beda versi)")
     print(f"✅ Model dimuat! {sum(p.numel() for p in model.parameters())/1e6:.1f}M parameter")
 
-    # ── Tokenizer ─────────────────────────────────────────────────────────
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
+    # ── Tokenizer (harus sama dengan yang dipakai saat pre-training) ───────
+    config.tokenizer_path = args.tokenizer_path or config.tokenizer_path
+    tokenizer = load_tokenizer(config)
 
     # ── Dataset & DataLoader ──────────────────────────────────────────────
     dataset = AlpacaDataset(args.data, tokenizer, config.max_seq_len)
@@ -193,13 +208,11 @@ def train(args):
     )
 
     # ── Optimizer ─────────────────────────────────────────────────────────
-    # SFT pakai learning rate lebih kecil dari pre-training
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=0.01,
-        betas=(0.9, 0.95),
-    )
+    # SFT pakai learning rate lebih kecil dari pre-training; decoupled weight
+    # decay (none on norm/bias params) — see aksarallm.trainer.build_optimizer.
+    config.weight_decay = 0.01
+    config.learning_rate = args.lr
+    optimizer = build_optimizer(model, config)
 
     total_steps = args.epochs * len(loader)
     warmup_steps = min(100, total_steps // 10)
@@ -211,7 +224,7 @@ def train(args):
         return max(0.1, 0.5 * (1 + math.cos(math.pi * progress)))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, get_lr)
-    scaler    = torch.cuda.amp.GradScaler(enabled=use_fp16)
+    scaler    = GradScaler("cuda", enabled=use_fp16)
 
     # ── Output dir ────────────────────────────────────────────────────────
     out_dir = Path(args.output_dir)
@@ -243,9 +256,9 @@ def train(args):
                 input_ids = input_ids[:, :config.max_seq_len]
                 targets   = targets[:, :config.max_seq_len]
 
-            with torch.cuda.amp.autocast(enabled=use_fp16):
+            with autocast("cuda", enabled=use_fp16):
                 logits, _ = model(input_ids)
-                # Hitung loss manual (ignore index=-1 untuk padding)
+                # ignore_index=-1 skips both padding AND masked prompt tokens
                 loss = F.cross_entropy(
                     logits.reshape(-1, logits.size(-1)),
                     targets.reshape(-1),
@@ -328,6 +341,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data", type=str, required=True,
         help="Path ke file JSONL dataset instruksi (translated_alpaca_id.jsonl)"
+    )
+    parser.add_argument(
+        "--tokenizer-path", type=str, default=None,
+        help="Path ke AksaraTokenizer (harus sama dengan yang dipakai saat pre-training). "
+             "Kalau kosong, pakai tokenizer_path dari checkpoint jika ada, atau fallback GPT-2."
     )
     parser.add_argument(
         "--output-dir", type=str, default="checkpoints/sft",

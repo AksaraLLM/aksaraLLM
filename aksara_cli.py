@@ -7,10 +7,10 @@
 ╚══════════════════════════════════════════════════════╝
 
 Usage:
-  python aksara_cli.py                    # Interactive mode
-  python aksara_cli.py --model local      # Use local 26M model
-  python aksara_cli.py --model qwen       # Use Qwen via HF API
-  python aksara_cli.py --model ollama     # Use Ollama local
+  python aksara_cli.py                    # Interactive mode (local AksaraLLM checkpoint)
+  python aksara_cli.py --model local      # Use a local from-scratch AksaraLLM checkpoint
+  python aksara_cli.py --model ollama --ollama-model aksarallm  # Use an Ollama-hosted GGUF export
+  python aksara_cli.py --model none       # Tools only, no model
 """
 
 import os
@@ -92,10 +92,11 @@ Identitas:
         ".gnupg/", ".netrc", ".pgpass",
     ]
 
-    def __init__(self, model_type="qwen", model_path=None, safe_mode=True):
+    def __init__(self, model_type="local", model_path=None, ollama_model="aksarallm", safe_mode=True):
         self.console = Console() if HAS_RICH else None
         self.model_type = model_type
         self.model_path = model_path
+        self.ollama_model = ollama_model
         self.safe_mode = safe_mode
         self.history = []
         self.model = None
@@ -174,8 +175,6 @@ Identitas:
         """Load AI model based on selected backend"""
         if self.model_type == "local":
             return self._load_local_model()
-        elif self.model_type == "qwen":
-            return self._load_qwen_api()
         elif self.model_type == "ollama":
             return self._load_ollama()
         else:
@@ -223,25 +222,15 @@ Identitas:
             self.print_error(f"Gagal load model: {e}")
             return False
 
-    def _load_qwen_api(self):
-        """Use Qwen via HuggingFace Inference API"""
-        try:
-            from huggingface_hub import InferenceClient
-            self.client = InferenceClient("Qwen/Qwen2.5-0.5B-Instruct")
-            self.print_success("Qwen2.5 via HuggingFace API ready")
-            return True
-        except ImportError:
-            self.print_info("Fallback: menggunakan requests langsung")
-            self.client = None
-            return True
-
     def _load_ollama(self):
-        """Use Ollama for local inference"""
+        """Use Ollama for local inference — points at whatever model tag was
+        loaded with `ollama create` (e.g. an AksaraLLM GGUF export via
+        scripts/convert_gguf.sh), not a third-party base model."""
         try:
             import requests
             r = requests.get("http://localhost:11434/api/tags", timeout=3)
             if r.status_code == 200:
-                self.print_success("Ollama connected!")
+                self.print_success(f"Ollama connected! (model: {self.ollama_model})")
                 return True
         except:
             self.print_error("Ollama tidak berjalan. Jalankan: ollama serve")
@@ -287,8 +276,6 @@ Identitas:
 
         if self.model_type == "local":
             return self._generate_local(full_prompt)
-        elif self.model_type == "qwen":
-            return self._generate_qwen(full_prompt)
         elif self.model_type == "ollama":
             return self._generate_ollama(full_prompt)
         else:
@@ -322,38 +309,12 @@ Identitas:
             out = out.replace(tag, "")
         return out.strip()
 
-    def _generate_qwen(self, prompt):
-        """Generate with Qwen via HuggingFace API"""
-        try:
-            if self.client:
-                messages = [
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ]
-                response = self.client.chat_completion(
-                    messages=messages,
-                    max_tokens=500,
-                    temperature=0.7,
-                )
-                return response.choices[0].message.content
-            else:
-                # Fallback to requests
-                import requests
-                r = requests.post(
-                    "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-0.5B-Instruct",
-                    json={"inputs": prompt, "parameters": {"max_new_tokens": 300}},
-                    timeout=30
-                )
-                return r.json()[0]["generated_text"]
-        except Exception as e:
-            return f"⚠️ API error: {e}"
-
     def _generate_ollama(self, prompt):
-        """Generate with Ollama"""
+        """Generate with Ollama, using whatever tag --ollama-model points at."""
         try:
             import requests
             r = requests.post("http://localhost:11434/api/generate", json={
-                "model": "qwen2.5:0.5b",
+                "model": self.ollama_model,
                 "prompt": prompt,
                 "system": self.SYSTEM_PROMPT,
                 "stream": False,
@@ -743,22 +704,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Contoh:
-  python aksara_cli.py                      # Default (Qwen API)
-  python aksara_cli.py --model local        # AksaraLLM 26M lokal
-  python aksara_cli.py --model ollama       # Ollama backend
+  python aksara_cli.py                      # Default: AksaraLLM lokal (from-scratch)
+  python aksara_cli.py --model local        # Sama seperti default
+  python aksara_cli.py --model ollama --ollama-model aksarallm  # Ollama, model GGUF AksaraLLM
   python aksara_cli.py --model none         # Hanya tools, tanpa AI
         """
     )
-    parser.add_argument("--model", choices=["local", "qwen", "ollama", "none"],
-                       default="qwen", help="Backend model (default: qwen)")
+    parser.add_argument("--model", choices=["local", "ollama", "none"],
+                       default="local", help="Backend model (default: local)")
     parser.add_argument("--model-path", help="Path ke checkpoint model (.pt)")
+    parser.add_argument("--ollama-model", default="aksarallm",
+                       help="Tag model Ollama yang dipakai untuk --model ollama (default: aksarallm)")
     parser.add_argument("--no-safe-mode", action="store_true",
                        help="Matikan safety guard (HATI-HATI!)")
-    
+
     args = parser.parse_args()
-    
+
     cli = AksaraCLI(model_type=args.model, model_path=args.model_path,
-                    safe_mode=not args.no_safe_mode)
+                    ollama_model=args.ollama_model, safe_mode=not args.no_safe_mode)
     cli.run()
 
 

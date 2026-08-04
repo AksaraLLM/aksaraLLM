@@ -31,13 +31,15 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp import autocast, GradScaler
 from torch.utils.data import Dataset, DataLoader
-from transformers import GPT2Tokenizer
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from aksarallm.model import aksaraLLMModel
 from aksarallm.config import aksaraLLMConfig, CONFIGS
+from aksarallm.data import load_tokenizer
+from aksarallm.trainer import build_optimizer
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -265,9 +267,9 @@ def train(args):
         policy    = torch.compile(policy,    mode="reduce-overhead")
         ref_model = torch.compile(ref_model, mode="reduce-overhead")
 
-    # ── Tokenizer ─────────────────────────────────────────────────────────
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    tokenizer.pad_token = tokenizer.eos_token
+    # ── Tokenizer (harus sama dengan yang dipakai saat pre-training/SFT) ───
+    config.tokenizer_path = args.tokenizer_path or config.tokenizer_path
+    tokenizer = load_tokenizer(config)
 
     # ── Dataset & DataLoader ──────────────────────────────────────────────
     dataset = HHRLHFDataset(args.data, tokenizer, config.max_seq_len)
@@ -282,13 +284,10 @@ def train(args):
         persistent_workers=True,                # ⚡ keep workers alive
     )
 
-    # ── Optimizer ─────────────────────────────────────────────────────────
-    optimizer = torch.optim.AdamW(
-        policy.parameters(),
-        lr=args.lr,
-        weight_decay=0.01,
-        betas=(0.9, 0.95),
-    )
+    # ── Optimizer (decoupled weight decay — see aksarallm.trainer.build_optimizer) ──
+    config.weight_decay = 0.01
+    config.learning_rate = args.lr
+    optimizer = build_optimizer(policy, config)
     total_steps  = args.epochs * len(loader)
     warmup_steps = min(50, total_steps // 20)
 
@@ -299,7 +298,7 @@ def train(args):
         return max(0.05, 0.5 * (1 + math.cos(math.pi * progress)))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, get_lr)
-    scaler    = torch.cuda.amp.GradScaler(enabled=use_fp16)
+    scaler    = GradScaler("cuda", enabled=use_fp16)
 
     # ── Output dir ────────────────────────────────────────────────────────
     out_dir = Path(args.output_dir)
@@ -328,7 +327,7 @@ def train(args):
             rejected_ids  = rejected_ids.to(device)
             rejected_mask = rejected_mask.to(device)
 
-            with torch.cuda.amp.autocast(enabled=use_fp16):
+            with autocast("cuda", enabled=use_fp16):
                 loss, metrics = dpo_loss(
                     policy, ref_model,
                     chosen_ids, chosen_mask,
@@ -411,6 +410,8 @@ if __name__ == "__main__":
                         help="Path ke SFT checkpoint (sft_best.pt)")
     parser.add_argument("--data", type=str, required=True,
                         help="Path ke file JSONL hh-rlhf (translated_hh_rlhf_shard_2.jsonl)")
+    parser.add_argument("--tokenizer-path", type=str, default=None,
+                        help="Path ke AksaraTokenizer (harus sama dengan pre-training/SFT)")
     parser.add_argument("--output-dir", type=str, default="checkpoints/dpo")
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
